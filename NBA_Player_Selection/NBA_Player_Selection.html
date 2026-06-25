@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NBA Player Selection PDF Viewer</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #111;
+        color: #eee;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      }
+
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+        padding: 0.75rem 1rem;
+        background: rgba(20, 20, 20, 0.95);
+        border-bottom: 1px solid #2a2a2a;
+        backdrop-filter: blur(4px);
+      }
+
+      button {
+        border: 1px solid #3a3a3a;
+        background: #1f1f1f;
+        color: #fff;
+        border-radius: 0.4rem;
+        padding: 0.35rem 0.7rem;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      #status {
+        margin-left: auto;
+        font-size: 0.9rem;
+        opacity: 0.9;
+      }
+
+      #viewer {
+        display: grid;
+        place-items: center;
+        padding: 1rem;
+      }
+
+      canvas {
+        width: min(95vw, 1000px);
+        height: auto;
+        background: #fff;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      }
+
+      .hint {
+        padding: 0 1rem 1rem;
+        color: #bbb;
+        font-size: 0.9rem;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <button id="prev">Prev</button>
+      <span>Page <span id="pageNum">1</span> / <span id="pageCount">--</span></span>
+      <button id="next">Next</button>
+      <button id="zoomOut">-</button>
+      <button id="zoomIn">+</button>
+      <span id="status">Loading…</span>
+    </header>
+
+    <main id="viewer">
+      <canvas id="pdfCanvas"></canvas>
+    </main>
+
+    <p class="hint">Tip: serve this folder with a local web server (not file://) if the PDF fails to load.</p>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs" type="module"></script>
+    <script type="module">
+      import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs';
+
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
+
+      const url = './NBA_Player_Selection.pdf';
+
+      const canvas = document.getElementById('pdfCanvas');
+      const ctx = canvas.getContext('2d');
+      const pageNumEl = document.getElementById('pageNum');
+      const pageCountEl = document.getElementById('pageCount');
+      const statusEl = document.getElementById('status');
+
+      const prevBtn = document.getElementById('prev');
+      const nextBtn = document.getElementById('next');
+      const zoomInBtn = document.getElementById('zoomIn');
+      const zoomOutBtn = document.getElementById('zoomOut');
+
+      let pdfDoc = null;
+      let pageNum = 1;
+      let scale = 1.25;
+      let isRendering = false;
+      let pendingPage = null;
+
+      function setStatus(msg) {
+        statusEl.textContent = msg;
+      }
+
+      function updateButtons() {
+        prevBtn.disabled = pageNum <= 1;
+        nextBtn.disabled = !pdfDoc || pageNum >= pdfDoc.numPages;
+      }
+
+      async function renderPage(num) {
+        if (!pdfDoc) return;
+
+        isRendering = true;
+        setStatus('Rendering…');
+
+        const page = await pdfDoc.getPage(num);
+        const viewport = page.getViewport({ scale });
+
+        const outputScale = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(viewport.width * outputScale);
+        canvas.height = Math.floor(viewport.height * outputScale);
+        canvas.style.width = `${viewport.width}px`;
+        canvas.style.height = `${viewport.height}px`;
+
+        const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
+
+        await page.render({
+          canvasContext: ctx,
+          viewport,
+          transform,
+        }).promise;
+
+        isRendering = false;
+        pageNumEl.textContent = String(pageNum);
+        setStatus('Ready');
+        updateButtons();
+
+        if (pendingPage !== null) {
+          const next = pendingPage;
+          pendingPage = null;
+          queueRenderPage(next);
+        }
+      }
+
+      function queueRenderPage(num) {
+        if (isRendering) {
+          pendingPage = num;
+        } else {
+          renderPage(num);
+        }
+      }
+
+      function onPrevPage() {
+        if (pageNum <= 1) return;
+        pageNum--;
+        queueRenderPage(pageNum);
+      }
+
+      function onNextPage() {
+        if (!pdfDoc || pageNum >= pdfDoc.numPages) return;
+        pageNum++;
+        queueRenderPage(pageNum);
+      }
+
+      function onZoom(delta) {
+        const nextScale = Math.min(3, Math.max(0.5, scale + delta));
+        if (nextScale === scale) return;
+        scale = nextScale;
+        queueRenderPage(pageNum);
+      }
+
+      prevBtn.addEventListener('click', onPrevPage);
+      nextBtn.addEventListener('click', onNextPage);
+      zoomInBtn.addEventListener('click', () => onZoom(0.15));
+      zoomOutBtn.addEventListener('click', () => onZoom(-0.15));
+
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowLeft') onPrevPage();
+        if (e.key === 'ArrowRight') onNextPage();
+        if (e.key === '+' || e.key === '=') onZoom(0.15);
+        if (e.key === '-') onZoom(-0.15);
+      });
+
+      try {
+        setStatus('Loading PDF…');
+        const loadingTask = pdfjsLib.getDocument(url);
+        pdfDoc = await loadingTask.promise;
+
+        pageCountEl.textContent = String(pdfDoc.numPages);
+        updateButtons();
+        await renderPage(pageNum);
+      } catch (err) {
+        console.error(err);
+        setStatus('Failed to load PDF');
+        pageCountEl.textContent = '--';
+      }
+    </script>
+  </body>
+</html>
